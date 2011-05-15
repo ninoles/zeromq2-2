@@ -37,7 +37,7 @@ namespace zmqtestutil
 
     //  Create a pair of sockets connected to each other.
     socket_pair create_bound_pair (zmq::context_t *context_,
-        int t1_, int t2_, const char *transport_)
+		int t1_, int t2_, const char *transport_)
     {
         zmq::socket_t *s1 = new zmq::socket_t (*context_, t1_);
         zmq::socket_t *s2 = new zmq::socket_t (*context_, t2_);
@@ -46,12 +46,9 @@ namespace zmqtestutil
         return socket_pair (s1, s2);
     }
 
-    //  Send a message from one socket in the pair to the other and back.
-    std::string ping_pong (const socket_pair &sp_, const std::string &orig_msg_)
+    std::string ping_pong (zmq::socket_t &s1, zmq::socket_t &s2, 
+        const std::string &orig_msg_)
     {
-        zmq::socket_t &s1 = *sp_.first;
-        zmq::socket_t &s2 = *sp_.second;
-
         //  Construct message to send.
         zmq::message_t ping (orig_msg_.size ());
         memcpy (ping.data (), orig_msg_.c_str (), orig_msg_.size ());
@@ -69,6 +66,12 @@ namespace zmqtestutil
 
         //  Return received data as std::string.
         return ret ;
+    }
+
+    //  Send a message from one socket in the pair to the other and back.
+    std::string ping_pong (const socket_pair &sp_, const std::string &orig_msg_)
+    {
+        return ping_pong(*(sp_.first), *(sp_.second), orig_msg_);
     }
 
     /*  Run basic tests for the given transport.
@@ -97,7 +100,7 @@ namespace zmqtestutil
         }
 
         {
-            //  Now poll is used to singal that a message is ready to read.
+            //  Now poll is used to signal that a message is ready to read.
             zmq::message_t m1 (expect.size ());
             memcpy (m1.data (), expect.c_str (), expect.size ());
             items [0].socket = *p.first;
@@ -125,6 +128,71 @@ namespace zmqtestutil
         delete (p.first);
         delete (p.second);
     }
+
+    struct device_config_t
+    {
+        zmq::context_t* context;
+        int fe;
+        int be;
+        const char* transport_fe;
+        const char* transport_be;
+        int device;
+    };
+
+    void create_broker(device_config_t* config_)
+    {
+        zmq::socket_t fe (*(config_->context), config_->fe);
+        zmq::socket_t be (*(config_->context), config_->be);
+        fe.bind (config_->transport_fe);
+        be.bind (config_->transport_be);
+        try
+        {
+            zmq::device (config_->device, fe, be);
+        }
+        catch(...)
+        {}
+    }
+
+    void* start_broker(void* config)
+    {
+        create_broker((device_config_t*)config);
+        return NULL;
+    }
+
+    void device_tests (const char *transport_fe_, const char* transport_be_, 
+        int fe_socket_, int be_socket_, 
+        int fe_client_, int be_worker_,
+        int device_)
+    {
+        zmq::context_t context (1);
+
+        pthread_t broker_thread;
+        device_config_t config;
+        config.context = &context;
+        config.fe = fe_socket_;
+        config.be = be_socket_;
+        config.transport_fe = transport_fe_;
+        config.transport_be = transport_be_;
+        config.device = device_;
+
+        pthread_create(&broker_thread, NULL, start_broker, &config);
+
+        zmq::socket_t client(context, fe_client_);
+        client.connect(transport_fe_);
+        zmq::socket_t worker(context, be_worker_);
+        worker.connect(transport_be_);
+
+        //  First test simple ping pong.
+        const string expect ("XXX");
+
+        {
+            const string returned = zmqtestutil::ping_pong (client, worker, expect);
+            assert (expect == returned);
+        }
+
+    }
+
+
 }
 
 #endif
